@@ -10,7 +10,6 @@ import org.godotengine.godot.Godot;
 import org.godotengine.godot.GodotRenderView;
 import org.godotengine.godot.input.GodotInputHandler;
 
-/** UI-thread owner of the bubble and render-view-only touch-to-mouse conversion. */
 final class FloatingMouseInputController {
 	enum Mode { LEFT, RIGHT_ONCE, RIGHT_LOCKED }
 	private static final String TAG = "FloatingMouseInput";
@@ -47,11 +46,8 @@ final class FloatingMouseInputController {
 			Log.w(TAG, "Unable to read floating mouse setting; disabling it.", exception);
 			enabled = false;
 		}
-		if (!enabled) {
-			detach();
-			return;
-		}
-		if (overlay == null) overlay = new FloatingMouseOverlayView(activity, this::onBubbleClicked);
+		if (!enabled) { detach(); return; }
+		if (overlay == null) overlay = new FloatingMouseOverlayView(activity, this::onBubbleClicked, this::resetControlSystem);
 		overlay.attach();
 		overlay.setMode(state.getMode());
 		ensureRenderViewBound();
@@ -83,10 +79,46 @@ final class FloatingMouseInputController {
 
 	private void onBubbleClicked() {
 		if (!enabled) return;
-		// A used RIGHT_ONCE is completed first; only an unused armed click can lock.
 		releaseActiveStream();
 		overlay.setMode(state.advanceOnBubbleClick());
 		Log.d(TAG, "Mouse mode: " + state.getMode());
+	}
+
+	/** Reset Android/Godot view-side input ownership without restarting the game. */
+	void resetControlSystem() {
+		if (!enabled) return;
+		Log.i(TAG, "Resetting mobile control input state.");
+		releaseActiveStream();
+		state.reset();
+		if (overlay != null) {
+			overlay.resetInteraction();
+			overlay.setMode(state.getMode());
+		}
+
+		GodotRenderView renderView = boundRenderView;
+		if (renderView == null || renderView.getView() == null) {
+			ensureRenderViewBound();
+			return;
+		}
+		View view = renderView.getView();
+		view.cancelPendingInputEvents();
+		view.setOnTouchListener(null);
+		view.removeOnAttachStateChangeListener(attachmentListener);
+		boundRenderView = null;
+		view.post(() -> {
+			if (!enabled) return;
+			Godot godot = activity.getGodot();
+			GodotRenderView current = godot == null ? null : godot.getRenderView();
+			if (current == null || current.getView() == null || !current.getView().isAttachedToWindow()) {
+				ensureRenderViewBound();
+				return;
+			}
+			boundRenderView = current;
+			current.getView().setOnTouchListener(touchListener);
+			current.getView().addOnAttachStateChangeListener(attachmentListener);
+			current.getView().requestFocus();
+			Log.i(TAG, "Mobile control input state reset; render view rebound.");
+		});
 	}
 
 	private void ensureRenderViewBound() {
@@ -151,7 +183,6 @@ final class FloatingMouseInputController {
 		} else if (action == MotionEvent.ACTION_MOVE) {
 			if (mouseDown) sendMouse(MotionEvent.ACTION_MOVE, event.getEventTime());
 		} else {
-			// Pointer-up and cancellation both balance exactly the accepted primary press.
 			if (mouseDown) sendMouse(MotionEvent.ACTION_UP, event.getEventTime());
 			mouseDown = false;
 			streamInput = null;
@@ -168,13 +199,8 @@ final class FloatingMouseInputController {
 		MotionEvent synthetic = MotionEvent.obtain(streamDownTime, eventTime, action, 1,
 			mouseProperties, mouseCoords, 0, action == MotionEvent.ACTION_UP ? 0 : MotionEvent.BUTTON_SECONDARY,
 			1, 1, 0, 0, InputDevice.SOURCE_MOUSE, 0);
-		try {
-			// Generic delivery bypasses Android touch double-tap/long-press synthesis.
-			// Godot still queues through its native input handler and applies its own transform.
-			return streamInput.onGenericMotionEvent(synthetic);
-		} finally {
-			synthetic.recycle();
-		}
+		try { return streamInput.onGenericMotionEvent(synthetic); }
+		finally { synthetic.recycle(); }
 	}
 
 	private void releaseActiveStream() {
