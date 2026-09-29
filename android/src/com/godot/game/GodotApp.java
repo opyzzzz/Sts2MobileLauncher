@@ -173,6 +173,7 @@ public class GodotApp extends GodotActivity {
 		requestHighRefreshRate("onCreate_after_super");
 		scheduleInGameOverlayAttach("onCreate_after_super");
 		floatingMouseInputController = new FloatingMouseInputController(this);
+		InputRecoveryNotification.show(this);
 		Log.i(TAG, "DIAG GodotApp.onCreate end windowFocused=" + currentWindowFocused);
 	}
 
@@ -928,6 +929,7 @@ public class GodotApp extends GodotActivity {
 		currentResumed = false;
 		currentWindowFocused = false;
 		highRefreshRateController.onDestroyed(this);
+		InputRecoveryNotification.cancel(this);
 		if (currentInstance == this) {
 			currentInstance = null;
 		}
@@ -955,6 +957,16 @@ public class GodotApp extends GodotActivity {
 			return;
 		}
 		activity.runOnUiThread(activity::applyConfiguredScreenOrientation);
+	}
+
+	public static boolean resetMobileControlSystem() {
+		GodotApp activity = currentInstance;
+		if (activity == null || activity.floatingMouseInputController == null) {
+			Log.w(TAG, "Input recovery requested but GodotApp is not active.");
+			return false;
+		}
+		activity.runOnUiThread(() -> activity.floatingMouseInputController.resetControlSystem());
+		return true;
 	}
 
 	public static boolean isGameWindowInteractive() {
