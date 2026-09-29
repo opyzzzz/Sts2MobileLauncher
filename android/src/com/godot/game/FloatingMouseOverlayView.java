@@ -32,6 +32,7 @@ final class FloatingMouseOverlayView extends FrameLayout {
 
 	private final Activity activity;
 	private final MouseButton button;
+	private final ResetButton resetButton;
 	private final int buttonSize;
 	private final int touchSlop;
 	private final Runnable idleFade;
@@ -48,7 +49,7 @@ final class FloatingMouseOverlayView extends FrameLayout {
 	private float xFraction;
 	private float yFraction;
 
-	FloatingMouseOverlayView(Activity activity, Runnable onClick) {
+	FloatingMouseOverlayView(Activity activity, Runnable onClick, Runnable onReset) {
 		super(activity);
 		this.activity = activity;
 		buttonSize = dp(56);
@@ -60,7 +61,10 @@ final class FloatingMouseOverlayView extends FrameLayout {
 		setFocusable(false);
 		setClipChildren(false);
 		button = new MouseButton();
-		idleFade = () -> button.animate().alpha(IDLE_ALPHA).setDuration(FADE_DURATION_MS).start();
+		idleFade = () -> {
+			button.animate().alpha(IDLE_ALPHA).setDuration(FADE_DURATION_MS).start();
+			resetButton.animate().alpha(IDLE_ALPHA).setDuration(FADE_DURATION_MS).start();
+		};
 		button.setClickable(true);
 		button.setFocusable(false);
 		button.setElevation(dp(8));
@@ -73,6 +77,20 @@ final class FloatingMouseOverlayView extends FrameLayout {
 		});
 		button.setOnTouchListener(this::onButtonTouch);
 		addView(button, new FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.TOP | Gravity.LEFT));
+		resetButton = new ResetButton();
+		resetButton.setClickable(true);
+		resetButton.setFocusable(false);
+		resetButton.setElevation(dp(8));
+		resetButton.setAlpha(IDLE_ALPHA);
+		resetButton.setContentDescription("重置操控");
+		resetButton.setOnClickListener(view -> {
+			showResetActive();
+			view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+			onReset.run();
+			scheduleIdle();
+		});
+		resetButton.setOnTouchListener(this::onResetTouch);
+		addView(resetButton, new FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.TOP | Gravity.LEFT));
 		ViewCompat.setOnApplyWindowInsetsListener(this, (view, insets) -> {
 			safeInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
 			placeButton();
@@ -111,6 +129,7 @@ final class FloatingMouseOverlayView extends FrameLayout {
 		removeCallbacks(idleFade);
 		button.animate().cancel();
 		button.setAlpha(IDLE_ALPHA);
+		resetButton.setAlpha(IDLE_ALPHA);
 		if (dragging) savePosition();
 		pointerId = -1;
 		dragging = false;
@@ -205,6 +224,31 @@ final class FloatingMouseOverlayView extends FrameLayout {
 		button.setAlpha(1f);
 	}
 
+	void resetInteraction() {
+		removeCallbacks(idleFade);
+		button.animate().cancel();
+		resetButton.animate().cancel();
+		pointerId = -1;
+		dragging = false;
+		multiTouch = false;
+		getParentDisallowIntercept(false);
+		button.setAlpha(IDLE_ALPHA);
+		resetButton.setAlpha(IDLE_ALPHA);
+		scheduleIdle();
+	}
+
+	private void showResetActive() {
+		removeCallbacks(idleFade);
+		resetButton.animate().cancel();
+		resetButton.setAlpha(1f);
+	}
+
+	private boolean onResetTouch(View view, MotionEvent event) {
+		if (event.getActionMasked() == MotionEvent.ACTION_DOWN) { showResetActive(); return true; }
+		if (event.getActionMasked() == MotionEvent.ACTION_UP) { view.performClick(); return true; }
+		return true;
+	}
+
 	private void scheduleIdle() {
 		removeCallbacks(idleFade);
 		if (attached) postDelayed(idleFade, IDLE_DELAY_MS);
@@ -215,6 +259,8 @@ final class FloatingMouseOverlayView extends FrameLayout {
 		button.setX(Float.isFinite(xFraction)
 			? minX() + clamp(xFraction, 0, 1) * (maxX() - minX()) : Math.max(minX(), maxX() - dp(18)));
 		button.setY(minY() + (Float.isFinite(yFraction) ? clamp(yFraction, 0, 1) : 0.5f) * (maxY() - minY()));
+		resetButton.setX(clamp(button.getX() - buttonSize - dp(8), minX(), maxX()));
+		resetButton.setY(button.getY());
 	}
 
 	private void savePosition() {
@@ -231,6 +277,27 @@ final class FloatingMouseOverlayView extends FrameLayout {
 	private float maxX() { return Math.max(minX(), getWidth() - safeInsets.right - buttonSize); }
 	private float maxY() { return Math.max(minY(), getHeight() - safeInsets.bottom - buttonSize); }
 	private static float clamp(float value, float min, float max) { return Math.max(min, Math.min(max, value)); }
+
+	private final class ResetButton extends View {
+		private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+		ResetButton() { super(activity); }
+		@Override protected void onDraw(Canvas canvas) {
+			super.onDraw(canvas);
+			float cx = getWidth() / 2f, cy = getHeight() / 2f, r = dp(13);
+			paint.setStyle(Paint.Style.STROKE);
+			paint.setStrokeWidth(dp(2));
+			paint.setStrokeCap(Paint.Cap.ROUND);
+			paint.setColor(ExtraSettingsUi.COLOR_PRIMARY);
+			canvas.drawArc(cx-r, cy-r, cx+r, cy+r, 35, 285, false, paint);
+			paint.setStyle(Paint.Style.FILL);
+			Path arrow = new Path();
+			arrow.moveTo(cx + dp(10), cy - dp(9));
+			arrow.lineTo(cx + dp(10), cy - dp(1));
+			arrow.lineTo(cx + dp(3), cy - dp(5));
+			arrow.close();
+			canvas.drawPath(arrow, paint);
+		}
+	}
 
 	/** Independently drawn mouse and lock; no upstream artwork is bundled. */
 	private final class MouseButton extends View {
